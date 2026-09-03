@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>サインスタンプ</title>
 
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -198,7 +198,17 @@
         canvas.width = img.width;
         canvas.height = img.height;
         saveBtn.disabled = false;
+        
+        if (stampImg) {
+          const aspect = stampImg.width / stampImg.height;
+          stampWidth = Math.min(canvas.width * 0.35, 250);
+          stampHeight = stampWidth / aspect;
+          stampX = (canvas.width - stampWidth) / 2;
+          stampY = (canvas.height - stampHeight) / 2;
+        }
+
         render();
+        URL.revokeObjectURL(img.src);
       };
       img.src = URL.createObjectURL(file);
     });
@@ -215,6 +225,7 @@
         stampX = (canvas.width - stampWidth) / 2;
         stampY = (canvas.height - stampHeight) / 2;
         render();
+        URL.revokeObjectURL(img.src);
       };
       img.src = URL.createObjectURL(file);
     });
