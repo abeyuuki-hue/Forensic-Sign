@@ -51,6 +51,7 @@
     .btn:active { transform: scale(0.97); }
     .btn:disabled { background: #bbb; box-shadow: none; cursor: not-allowed; }
     .btn-save { background: #2ECC71; }
+    .btn-sub { background: #8E44AD; }
     .instruction { font-size: 0.85rem; color: #666; margin: 0 0 10px 0; }
 
     #canvas-container {
@@ -70,6 +71,39 @@
       height: auto;
       touch-action: none;
     }
+    #sign-maker {
+      display: none;
+      margin: 12px auto 0;
+      padding: 12px;
+      max-width: 720px;
+      background: #ffffff;
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    #sign-maker p {
+      margin: 0 0 8px 0;
+      color: #555;
+      font-size: 0.9rem;
+    }
+    #sign-canvas {
+      width: 100%;
+      max-width: 680px;
+      height: 220px;
+      background: #fff;
+      border: 2px solid #bbb;
+      border-radius: 8px;
+      margin: 0 auto;
+      touch-action: none;
+      display: block;
+    }
+    .sign-controls {
+      margin-top: 10px;
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
   </style>
 </head>
 <body>
@@ -78,6 +112,7 @@
   <div class="controls">
     <label class="btn">🖼️ えをえらぶ <input type="file" id="bg-input" accept="image/*" hidden></label>
     <label class="btn">✍️ サインをえらぶ <input type="file" id="stamp-input" accept="image/*" hidden></label>
+    <button id="create-sign-btn" class="btn btn-sub">🖊️ サインをつくる</button>
     <button id="save-btn" class="btn btn-save" disabled>💾 ほぞんする</button>
   </div>
 
@@ -87,12 +122,29 @@
     <canvas id="main-canvas" width="600" height="400"></canvas>
   </div>
 
+  <div id="sign-maker">
+    <p>ここにサインをかいて、「このサインをつかう」をおしてね</p>
+    <canvas id="sign-canvas" width="680" height="220"></canvas>
+    <div class="sign-controls">
+      <button id="clear-sign-btn" class="btn">🧽 けす</button>
+      <button id="apply-sign-btn" class="btn btn-sub">✅ このサインをつかう</button>
+      <button id="close-sign-btn" class="btn">✖️ とじる</button>
+    </div>
+  </div>
+
   <script>
     const canvas = document.getElementById('main-canvas');
     const ctx = canvas.getContext('2d');
     const bgInput = document.getElementById('bg-input');
     const stampInput = document.getElementById('stamp-input');
+    const createSignBtn = document.getElementById('create-sign-btn');
     const saveBtn = document.getElementById('save-btn');
+    const signMaker = document.getElementById('sign-maker');
+    const signCanvas = document.getElementById('sign-canvas');
+    const signCtx = signCanvas.getContext('2d');
+    const clearSignBtn = document.getElementById('clear-sign-btn');
+    const applySignBtn = document.getElementById('apply-sign-btn');
+    const closeSignBtn = document.getElementById('close-sign-btn');
 
     let bgImg = null;
     let stampImg = null;
@@ -105,6 +157,13 @@
     let isDragging = false;
     let dragStartX = 0;
     let dragStartY = 0;
+    let isSignDrawing = false;
+    let hasSignStroke = false;
+
+    signCtx.strokeStyle = '#111111';
+    signCtx.lineWidth = 4;
+    signCtx.lineCap = 'round';
+    signCtx.lineJoin = 'round';
 
     function render() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -160,6 +219,68 @@
       img.src = URL.createObjectURL(file);
     });
 
+    function openSignMaker() {
+      signMaker.style.display = 'block';
+    }
+
+    function closeSignMaker() {
+      signMaker.style.display = 'none';
+    }
+
+    function clearSignCanvas() {
+      signCtx.clearRect(0, 0, signCanvas.width, signCanvas.height);
+      hasSignStroke = false;
+    }
+
+    function getSignPos(e) {
+      const rect = signCanvas.getBoundingClientRect();
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      const scaleX = signCanvas.width / rect.width;
+      const scaleY = signCanvas.height / rect.height;
+      return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY
+      };
+    }
+
+    function startSignDraw(e) {
+      e.preventDefault();
+      const pos = getSignPos(e);
+      signCtx.beginPath();
+      signCtx.moveTo(pos.x, pos.y);
+      isSignDrawing = true;
+      hasSignStroke = true;
+    }
+
+    function moveSignDraw(e) {
+      if (!isSignDrawing) return;
+      e.preventDefault();
+      const pos = getSignPos(e);
+      signCtx.lineTo(pos.x, pos.y);
+      signCtx.stroke();
+    }
+
+    function endSignDraw() {
+      isSignDrawing = false;
+    }
+
+    function applyCreatedSign() {
+      if (!hasSignStroke) return;
+      const img = new Image();
+      img.onload = () => {
+        stampImg = img;
+        const aspect = img.width / img.height;
+        stampWidth = Math.min(canvas.width * 0.35, 250);
+        stampHeight = stampWidth / aspect;
+        stampX = (canvas.width - stampWidth) / 2;
+        stampY = (canvas.height - stampHeight) / 2;
+        render();
+        closeSignMaker();
+      };
+      img.src = signCanvas.toDataURL('image/png');
+    }
+
     function getPos(e) {
       const rect = canvas.getBoundingClientRect();
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -203,6 +324,19 @@
     canvas.addEventListener('touchstart', startDrag, { passive: false });
     canvas.addEventListener('touchmove', moveDrag, { passive: false });
     window.addEventListener('touchend', stopDrag);
+
+    signCanvas.addEventListener('mousedown', startSignDraw);
+    signCanvas.addEventListener('mousemove', moveSignDraw);
+    window.addEventListener('mouseup', endSignDraw);
+
+    signCanvas.addEventListener('touchstart', startSignDraw, { passive: false });
+    signCanvas.addEventListener('touchmove', moveSignDraw, { passive: false });
+    window.addEventListener('touchend', endSignDraw);
+
+    createSignBtn.addEventListener('click', openSignMaker);
+    clearSignBtn.addEventListener('click', clearSignCanvas);
+    applySignBtn.addEventListener('click', applyCreatedSign);
+    closeSignBtn.addEventListener('click', closeSignMaker);
 
     saveBtn.addEventListener('click', () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
