@@ -127,6 +127,72 @@
       font-size: 0.88rem;
       color: #555;
     }
+    #stamp-settings {
+      margin: 12px auto 0;
+      max-width: 720px;
+      text-align: left;
+      background: #ffffff;
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      padding: 12px;
+    }
+    #stamp-settings p {
+      margin: 0 0 10px 0;
+      font-size: 0.9rem;
+      color: #555;
+    }
+    .setting-row {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .setting-row label {
+      font-size: 0.92rem;
+      color: #333;
+      font-weight: 600;
+    }
+    .setting-row input[type="range"] {
+      width: 100%;
+    }
+    .metadata-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+    }
+    .metadata-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 0.88rem;
+      color: #444;
+    }
+    .metadata-field input,
+    .metadata-field textarea {
+      font: inherit;
+      padding: 8px 10px;
+      border: 1px solid #cfd7df;
+      border-radius: 8px;
+      box-sizing: border-box;
+      width: 100%;
+      resize: vertical;
+    }
+    .metadata-field textarea {
+      min-height: 78px;
+    }
+    .metadata-preview {
+      margin-top: 14px;
+    }
+    .metadata-preview ul {
+      margin: 8px 0 0 18px;
+      padding: 0;
+      color: #4b5563;
+      font-size: 0.85rem;
+    }
+    .metadata-preview li + li {
+      margin-top: 4px;
+    }
     #asset-list {
       display: flex;
       gap: 8px;
@@ -178,6 +244,35 @@
     <div id="asset-list"></div>
   </div>
 
+  <div id="stamp-settings">
+    <p>🏷️ スタンプの透明度と、保存PNGに埋め込むメタデータを編集できます</p>
+    <div class="setting-row">
+      <label for="stamp-opacity">透明度: <span id="stamp-opacity-value">100%</span></label>
+      <input type="range" id="stamp-opacity" min="5" max="100" value="100">
+    </div>
+    <div class="metadata-grid">
+      <label class="metadata-field">タイトル
+        <input type="text" id="meta-title" placeholder="作品名やスタンプ名">
+      </label>
+      <label class="metadata-field">作者
+        <input type="text" id="meta-author" placeholder="作者名">
+      </label>
+      <label class="metadata-field">コピーライト
+        <input type="text" id="meta-copyright" placeholder="© 2026 Example">
+      </label>
+      <label class="metadata-field">キーワード
+        <input type="text" id="meta-keywords" placeholder="署名, スタンプ, ロゴ">
+      </label>
+      <label class="metadata-field" style="grid-column: 1 / -1;">説明メモ
+        <textarea id="meta-description" placeholder="このスタンプの用途や説明を入力"></textarea>
+      </label>
+    </div>
+    <div class="metadata-preview">
+      <p>保存時に自動で埋め込まれる情報</p>
+      <ul id="metadata-preview-list"></ul>
+    </div>
+  </div>
+
   <div id="sign-maker">
     <p>ここにサインをかいて、「このサインをつかう」をおしてね</p>
     <canvas id="sign-canvas" width="680" height="220"></canvas>
@@ -199,6 +294,9 @@
     const saveBtn = document.getElementById('save-btn');
     const statusMsg = document.getElementById('status-msg');
     const assetList = document.getElementById('asset-list');
+    const stampOpacityInput = document.getElementById('stamp-opacity');
+    const stampOpacityValue = document.getElementById('stamp-opacity-value');
+    const metadataPreviewList = document.getElementById('metadata-preview-list');
     const signMaker = document.getElementById('sign-maker');
     const signCanvas = document.getElementById('sign-canvas');
     const signCtx = signCanvas.getContext('2d');
@@ -206,9 +304,18 @@
     const applySignBtn = document.getElementById('apply-sign-btn');
     const saveSignBtn = document.getElementById('save-sign-btn');
     const closeSignBtn = document.getElementById('close-sign-btn');
+    const metadataInputs = {
+      Title: document.getElementById('meta-title'),
+      Author: document.getElementById('meta-author'),
+      Copyright: document.getElementById('meta-copyright'),
+      Keywords: document.getElementById('meta-keywords'),
+      Description: document.getElementById('meta-description')
+    };
 
     let bgImg = null;
     let stampImg = null;
+    let stampOpacity = 1;
+    let currentStampName = '未選択';
 
     let stampX = 50;
     let stampY = 50;
@@ -228,13 +335,70 @@
     signCtx.lineCap = 'round';
     signCtx.lineJoin = 'round';
 
+    const textEncoder = new TextEncoder();
+    const pngSignatureSize = 8;
+    const crcTable = (() => {
+      const table = new Uint32Array(256);
+      for (let n = 0; n < 256; n += 1) {
+        let c = n;
+        for (let k = 0; k < 8; k += 1) {
+          c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        }
+        table[n] = c >>> 0;
+      }
+      return table;
+    })();
+
     function showStatus(message, type = '') {
       statusMsg.textContent = message;
       statusMsg.className = `status${type ? ` ${type}` : ''}`;
     }
 
-    function applyStampImage(img) {
+    function updateOpacityLabel() {
+      stampOpacityValue.textContent = `${Math.round(stampOpacity * 100)}%`;
+    }
+
+    function getEditableMetadata() {
+      return Object.fromEntries(
+        Object.entries(metadataInputs)
+          .map(([key, input]) => [key, input.value.trim()])
+          .filter(([, value]) => value)
+      );
+    }
+
+    function getAutomaticMetadata() {
+      return {
+        Software: 'Forensic-Sign',
+        CreationTime: '保存時に自動入力',
+        StampSource: currentStampName,
+        StampOpacity: `${Math.round(stampOpacity * 100)}%`,
+        StampPosition: `${Math.round(stampX)}, ${Math.round(stampY)}`,
+        StampSize: `${Math.round(stampWidth)} x ${Math.round(stampHeight)}`,
+        CanvasSize: `${canvas.width} x ${canvas.height}`
+      };
+    }
+
+    function getExportMetadata(overrides = {}) {
+      return {
+        ...getEditableMetadata(),
+        ...getAutomaticMetadata(),
+        CreationTime: new Date().toISOString(),
+        ...overrides
+      };
+    }
+
+    function renderMetadataPreview() {
+      metadataPreviewList.innerHTML = '';
+      Object.entries(getAutomaticMetadata()).forEach(([key, value]) => {
+        const item = document.createElement('li');
+        item.textContent = `${key}: ${value}`;
+        metadataPreviewList.appendChild(item);
+      });
+    }
+
+    function applyStampImage(img, name = '読み込み画像') {
       stampImg = img;
+      currentStampName = name;
       const aspect = img.width / img.height;
       stampWidth = Math.min(canvas.width * 0.35, 250);
       stampHeight = stampWidth / aspect;
@@ -260,7 +424,7 @@
           const img = new Image();
           img.onload = () => {
             activeAssetIndex = index;
-            applyStampImage(img);
+            applyStampImage(img, asset.name);
             renderAssetList();
             showStatus(`「${asset.name}」をスタンプにセットしました。`, 'ok');
           };
@@ -300,13 +464,18 @@
       }
 
       if (stampImg) {
+        ctx.save();
+        ctx.globalAlpha = stampOpacity;
         ctx.drawImage(stampImg, stampX, stampY, stampWidth, stampHeight);
+        ctx.restore();
         ctx.strokeStyle = '#2ECC71';
         ctx.lineWidth = 3;
         ctx.setLineDash([8, 8]);
         ctx.strokeRect(stampX, stampY, stampWidth, stampHeight);
         ctx.setLineDash([]);
       }
+
+      renderMetadataPreview();
     }
 
     bgInput.addEventListener('change', (e) => {
@@ -328,7 +497,7 @@
       if (!file) return;
       const img = new Image();
       img.onload = () => {
-        applyStampImage(img);
+        applyStampImage(img, file.name);
         activeAssetIndex = -1;
         showStatus(`「${file.name}」をスタンプにセットしました。`, 'ok');
       };
@@ -394,10 +563,10 @@
 
     function applyCreatedSign() {
       if (!hasSignStroke) return;
+      const createdName = `作成サイン${registeredAssets.length + 1}`;
       const img = new Image();
       img.onload = () => {
-        applyStampImage(img);
-        const createdName = `作成サイン${registeredAssets.length + 1}`;
+        applyStampImage(img, createdName);
         registerAsset(signCanvas.toDataURL('image/png'), createdName);
         activeAssetIndex = registeredAssets.length - 1;
         renderAssetList();
@@ -407,16 +576,113 @@
       img.src = signCanvas.toDataURL('image/png');
     }
 
-    function saveCreatedSign() {
+    function crc32(bytes) {
+      let crc = 0xFFFFFFFF;
+      for (const byte of bytes) {
+        crc = crcTable[(crc ^ byte) & 0xFF] ^ (crc >>> 8);
+      }
+      return (crc ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    function concatUint8Arrays(chunks) {
+      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      const result = new Uint8Array(totalLength);
+      let offset = 0;
+      chunks.forEach((chunk) => {
+        result.set(chunk, offset);
+        offset += chunk.length;
+      });
+      return result;
+    }
+
+    function createChunk(type, dataBytes) {
+      const typeBytes = textEncoder.encode(type);
+      const chunk = new Uint8Array(dataBytes.length + 12);
+      const chunkView = new DataView(chunk.buffer);
+      chunkView.setUint32(0, dataBytes.length);
+      chunk.set(typeBytes, 4);
+      chunk.set(dataBytes, 8);
+
+      const crcInput = new Uint8Array(typeBytes.length + dataBytes.length);
+      crcInput.set(typeBytes, 0);
+      crcInput.set(dataBytes, typeBytes.length);
+      chunkView.setUint32(8 + dataBytes.length, crc32(crcInput));
+      return chunk;
+    }
+
+    function createITXtData(keyword, value) {
+      const keywordBytes = textEncoder.encode(keyword);
+      const valueBytes = textEncoder.encode(value);
+      const prefix = new Uint8Array(keywordBytes.length + 5);
+      prefix.set(keywordBytes, 0);
+      return concatUint8Arrays([prefix, valueBytes]);
+    }
+
+    function injectMetadataIntoPng(pngBytes, metadata) {
+      const view = new DataView(pngBytes.buffer, pngBytes.byteOffset, pngBytes.byteLength);
+      let offset = pngSignatureSize;
+
+      while (offset < pngBytes.length) {
+        const length = view.getUint32(offset);
+        const typeBytes = pngBytes.slice(offset + 4, offset + 8);
+        const type = String.fromCharCode(...typeBytes);
+
+        if (type === 'IEND') {
+          const metadataChunks = Object.entries(metadata)
+            .filter(([, value]) => value)
+            .map(([key, value]) => createChunk('iTXt', createITXtData(key, String(value))));
+
+          return concatUint8Arrays([
+            pngBytes.slice(0, offset),
+            ...metadataChunks,
+            pngBytes.slice(offset)
+          ]);
+        }
+
+        offset += length + 12;
+      }
+
+      return pngBytes;
+    }
+
+    function createDownloadUrl(bytes) {
+      return URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
+    }
+
+    async function canvasToPngBytes(targetCanvas) {
+      const blob = await new Promise((resolve) => targetCanvas.toBlob(resolve, 'image/png'));
+      if (!blob) {
+        throw new Error('PNGの書き出しに失敗しました。');
+      }
+      return new Uint8Array(await blob.arrayBuffer());
+    }
+
+    async function downloadCanvasWithMetadata(filename, targetCanvas, metadata) {
+      const pngBytes = await canvasToPngBytes(targetCanvas);
+      const outputBytes = injectMetadataIntoPng(pngBytes, metadata);
+      const url = createDownloadUrl(outputBytes);
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = url;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+
+    async function saveCreatedSign() {
       if (!hasSignStroke) {
         showStatus('先にサインを描いてください。', 'warn');
         return;
       }
-      const link = document.createElement('a');
-      link.download = 'サイン.png';
-      link.href = signCanvas.toDataURL('image/png');
-      link.click();
-      showStatus('「サイン.png」を端末のダウンロードに保存しました。', 'ok');
+      try {
+        await downloadCanvasWithMetadata('サイン.png', signCanvas, getExportMetadata({
+          ExportKind: 'stamp-only',
+          StampSource: '手書きサイン',
+          StampCanvasSize: `${signCanvas.width} x ${signCanvas.height}`
+        }));
+        showStatus('「サイン.png」を端末のダウンロードに保存しました。', 'ok');
+      } catch (error) {
+        showStatus(error.message, 'warn');
+      }
     }
 
     function getPos(e) {
@@ -476,21 +742,42 @@
     applySignBtn.addEventListener('click', applyCreatedSign);
     saveSignBtn.addEventListener('click', saveCreatedSign);
     closeSignBtn.addEventListener('click', closeSignMaker);
-
-    saveBtn.addEventListener('click', () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (bgImg) ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
-      if (stampImg) ctx.drawImage(stampImg, stampX, stampY, stampWidth, stampHeight);
-
-      const link = document.createElement('a');
-      link.download = 'まもったえ.png';
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-      showStatus('「まもったえ.png」を端末のダウンロードに保存しました。', 'ok');
-
+    stampOpacityInput.addEventListener('input', (e) => {
+      stampOpacity = Number(e.target.value) / 100;
+      updateOpacityLabel();
       render();
     });
+    Object.values(metadataInputs).forEach((input) => {
+      input.addEventListener('input', renderMetadataPreview);
+    });
 
+    saveBtn.addEventListener('click', async () => {
+      try {
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = canvas.width;
+        exportCanvas.height = canvas.height;
+        const exportCtx = exportCanvas.getContext('2d');
+
+        if (bgImg) {
+          exportCtx.drawImage(bgImg, 0, 0, exportCanvas.width, exportCanvas.height);
+        }
+        if (stampImg) {
+          exportCtx.save();
+          exportCtx.globalAlpha = stampOpacity;
+          exportCtx.drawImage(stampImg, stampX, stampY, stampWidth, stampHeight);
+          exportCtx.restore();
+        }
+
+        await downloadCanvasWithMetadata('まもったえ.png', exportCanvas, getExportMetadata({
+          ExportKind: 'merged-image'
+        }));
+        showStatus('「まもったえ.png」を端末のダウンロードに保存しました。', 'ok');
+      } catch (error) {
+        showStatus(error.message, 'warn');
+      }
+    });
+
+    updateOpacityLabel();
     render();
   </script>
 </body>
