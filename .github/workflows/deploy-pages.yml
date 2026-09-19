@@ -31,6 +31,7 @@ jobs:
         run: |
           mkdir dist
           cp index.html dist/
+          cp google-sites.html dist/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
