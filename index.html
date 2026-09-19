@@ -53,6 +53,14 @@
     .btn-save { background: #2ECC71; }
     .btn-sub { background: #8E44AD; }
     .instruction { font-size: 0.85rem; color: #666; margin: 0 0 10px 0; }
+    .status {
+      font-size: 0.85rem;
+      margin: 0 0 12px 0;
+      min-height: 1.2em;
+      color: #2c3e50;
+    }
+    .status.ok { color: #1f8b4c; }
+    .status.warn { color: #a35d00; }
 
     #canvas-container {
       display: inline-block;
@@ -104,6 +112,46 @@
       gap: 8px;
       flex-wrap: wrap;
     }
+    #asset-library {
+      margin: 12px auto 0;
+      max-width: 720px;
+      text-align: left;
+      background: #ffffff;
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      padding: 10px;
+    }
+    #asset-library p {
+      margin: 0 0 8px 0;
+      font-size: 0.88rem;
+      color: #555;
+    }
+    #asset-list {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+    .asset-item {
+      border: 2px solid #d5dce5;
+      border-radius: 8px;
+      background: #fff;
+      min-width: 72px;
+      width: 72px;
+      height: 72px;
+      padding: 2px;
+      cursor: pointer;
+    }
+    .asset-item.active {
+      border-color: #4A90E2;
+    }
+    .asset-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
   </style>
 </head>
 <body>
@@ -111,15 +159,23 @@
 
   <div class="controls">
     <label class="btn">🖼️ えをえらぶ <input type="file" id="bg-input" accept="image/*" hidden></label>
-    <label class="btn">✍️ サインをえらぶ <input type="file" id="stamp-input" accept="image/*" hidden></label>
+    <label class="btn">✍️ サイン/ロゴをえらぶ <input type="file" id="stamp-input" accept="image/*" hidden></label>
+    <label class="btn">📚 マーク/ロゴをとうろく <input type="file" id="asset-input" accept="image/*" multiple hidden></label>
     <button id="create-sign-btn" class="btn btn-sub">🖊️ サインをつくる</button>
     <button id="save-btn" class="btn btn-save" disabled>💾 ほぞんする</button>
   </div>
 
-  <p class="instruction">💡 サインをゆびでタッチしたまま、すきな場所にうごかせるよ！</p>
+  <p class="instruction">💡 サイン/ロゴをタッチしたまま、すきな場所にうごかせるよ！</p>
+  <p class="instruction">💾 ほぞんすると、つうじょうは端末の「ダウンロード」フォルダに入るよ</p>
+  <p id="status-msg" class="status"></p>
 
   <div id="canvas-container">
     <canvas id="main-canvas" width="600" height="400"></canvas>
+  </div>
+
+  <div id="asset-library">
+    <p>📁 とうろくしたマーク/ロゴ（タップでつかう）</p>
+    <div id="asset-list"></div>
   </div>
 
   <div id="sign-maker">
@@ -128,6 +184,7 @@
     <div class="sign-controls">
       <button id="clear-sign-btn" class="btn">🧽 けす</button>
       <button id="apply-sign-btn" class="btn btn-sub">✅ このサインをつかう</button>
+      <button id="save-sign-btn" class="btn btn-save">💾 サインだけ保存</button>
       <button id="close-sign-btn" class="btn">✖️ とじる</button>
     </div>
   </div>
@@ -137,13 +194,17 @@
     const ctx = canvas.getContext('2d');
     const bgInput = document.getElementById('bg-input');
     const stampInput = document.getElementById('stamp-input');
+    const assetInput = document.getElementById('asset-input');
     const createSignBtn = document.getElementById('create-sign-btn');
     const saveBtn = document.getElementById('save-btn');
+    const statusMsg = document.getElementById('status-msg');
+    const assetList = document.getElementById('asset-list');
     const signMaker = document.getElementById('sign-maker');
     const signCanvas = document.getElementById('sign-canvas');
     const signCtx = signCanvas.getContext('2d');
     const clearSignBtn = document.getElementById('clear-sign-btn');
     const applySignBtn = document.getElementById('apply-sign-btn');
+    const saveSignBtn = document.getElementById('save-sign-btn');
     const closeSignBtn = document.getElementById('close-sign-btn');
 
     let bgImg = null;
@@ -159,11 +220,70 @@
     let dragStartY = 0;
     let isSignDrawing = false;
     let hasSignStroke = false;
+    const registeredAssets = [];
+    let activeAssetIndex = -1;
 
     signCtx.strokeStyle = '#111111';
     signCtx.lineWidth = 4;
     signCtx.lineCap = 'round';
     signCtx.lineJoin = 'round';
+
+    function showStatus(message, type = '') {
+      statusMsg.textContent = message;
+      statusMsg.className = `status${type ? ` ${type}` : ''}`;
+    }
+
+    function applyStampImage(img) {
+      stampImg = img;
+      const aspect = img.width / img.height;
+      stampWidth = Math.min(canvas.width * 0.35, 250);
+      stampHeight = stampWidth / aspect;
+      stampX = (canvas.width - stampWidth) / 2;
+      stampY = (canvas.height - stampHeight) / 2;
+      render();
+    }
+
+    function renderAssetList() {
+      assetList.innerHTML = '';
+      registeredAssets.forEach((asset, index) => {
+        const btn = document.createElement('button');
+        btn.className = `asset-item${index === activeAssetIndex ? ' active' : ''}`;
+        btn.type = 'button';
+        btn.title = asset.name;
+
+        const preview = document.createElement('img');
+        preview.src = asset.dataUrl;
+        preview.alt = asset.name;
+        btn.appendChild(preview);
+
+        btn.addEventListener('click', () => {
+          const img = new Image();
+          img.onload = () => {
+            activeAssetIndex = index;
+            applyStampImage(img);
+            renderAssetList();
+            showStatus(`「${asset.name}」をスタンプにセットしました。`, 'ok');
+          };
+          img.src = asset.dataUrl;
+        });
+
+        assetList.appendChild(btn);
+      });
+    }
+
+    function registerAsset(dataUrl, name) {
+      registeredAssets.push({ dataUrl, name });
+      renderAssetList();
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
 
     function render() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -208,15 +328,22 @@
       if (!file) return;
       const img = new Image();
       img.onload = () => {
-        stampImg = img;
-        const aspect = img.width / img.height;
-        stampWidth = Math.min(canvas.width * 0.35, 250);
-        stampHeight = stampWidth / aspect;
-        stampX = (canvas.width - stampWidth) / 2;
-        stampY = (canvas.height - stampHeight) / 2;
-        render();
+        applyStampImage(img);
+        activeAssetIndex = -1;
+        showStatus(`「${file.name}」をスタンプにセットしました。`, 'ok');
       };
       img.src = URL.createObjectURL(file);
+    });
+
+    assetInput.addEventListener('change', async (e) => {
+      const files = Array.from(e.target.files || []);
+      if (!files.length) return;
+      for (const file of files) {
+        const dataUrl = await readFileAsDataUrl(file);
+        registerAsset(dataUrl, file.name);
+      }
+      showStatus(`${files.length}件のマーク/ロゴを登録しました。`, 'ok');
+      e.target.value = '';
     });
 
     function openSignMaker() {
@@ -269,16 +396,27 @@
       if (!hasSignStroke) return;
       const img = new Image();
       img.onload = () => {
-        stampImg = img;
-        const aspect = img.width / img.height;
-        stampWidth = Math.min(canvas.width * 0.35, 250);
-        stampHeight = stampWidth / aspect;
-        stampX = (canvas.width - stampWidth) / 2;
-        stampY = (canvas.height - stampHeight) / 2;
-        render();
+        applyStampImage(img);
+        const createdName = `作成サイン${registeredAssets.length + 1}`;
+        registerAsset(signCanvas.toDataURL('image/png'), createdName);
+        activeAssetIndex = registeredAssets.length - 1;
+        renderAssetList();
+        showStatus('作成したサインをスタンプにセットし、ライブラリに追加しました。', 'ok');
         closeSignMaker();
       };
       img.src = signCanvas.toDataURL('image/png');
+    }
+
+    function saveCreatedSign() {
+      if (!hasSignStroke) {
+        showStatus('先にサインを描いてください。', 'warn');
+        return;
+      }
+      const link = document.createElement('a');
+      link.download = 'サイン.png';
+      link.href = signCanvas.toDataURL('image/png');
+      link.click();
+      showStatus('「サイン.png」を端末のダウンロードに保存しました。', 'ok');
     }
 
     function getPos(e) {
@@ -336,6 +474,7 @@
     createSignBtn.addEventListener('click', openSignMaker);
     clearSignBtn.addEventListener('click', clearSignCanvas);
     applySignBtn.addEventListener('click', applyCreatedSign);
+    saveSignBtn.addEventListener('click', saveCreatedSign);
     closeSignBtn.addEventListener('click', closeSignMaker);
 
     saveBtn.addEventListener('click', () => {
@@ -347,6 +486,7 @@
       link.download = 'まもったえ.png';
       link.href = canvas.toDataURL('image/png');
       link.click();
+      showStatus('「まもったえ.png」を端末のダウンロードに保存しました。', 'ok');
 
       render();
     });
